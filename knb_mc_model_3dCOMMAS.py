@@ -92,7 +92,12 @@ import pandas as pd
 
 import numpy as np
 
-def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,SEEDER = 10.,coords = [1e4,0.,1e4,0.,1e4,0.], 
+import numpy as np
+
+def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,SEEDER = 10.,
+               LIMIT = 500.,
+               HOMOGENEOUS = False,
+               coords = [40e3,0.,40e3,0.,20e3,0.], 
                origin = [5e3,5e3,5e3]):
 
     #origin order is [z,y,x] because gridcoords is z,y,x
@@ -132,7 +137,8 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
     a = 10**-5. #evaluate if e is a double, or long
     N = 10**8.
     LAM = 1./(2.*np.pi*(a**2.)*N)
-
+    # LAM = 70.
+    #comment for a 3d heterogenerous cloud
     # print(LAM)
 #     N_dense = np.reshape(concentration,length)
 #     a_arr = np.reshape(size,length)
@@ -160,11 +166,11 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
 #     masktree = spatial.KDTree(maskstack)
     
     #******
-    point = masktree.query(origin)
-    if point[0] >1100.:
-        outofCloud = 1
-    else:
-        outofCloud = 0
+    # point = masktree.query(origin)
+    # if point[0] >1100.:
+    #     outofCloud = 1
+    # else:
+    #     outofCloud = 0
     
     
     #####calculate the array of possible scattering angles using the Henyey-Greenstein phase function
@@ -188,7 +194,7 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
     zprev_arr = np.zeros(m)
     zenith_arrout = np.zeros(m)
     azimuth_arrout = np.zeros(m)
-    absorb = 0
+    absorb = np.zeros(m)
  
     zenith_orig = np.zeros(m)
     azimuth_orig = np.zeros(m)
@@ -224,8 +230,20 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
 
     #UNCOMMENT THIS FOR DISTRIBUTED LAMBDA
     LAM = LAM_arr[tree.query(origin)[1]]
+    # LAM = 70.
     print(LAM)
     x_scat_0 = -LAM*np.log(r_m)
+    
+    #two cases:
+    #1 Emitted in the cloud
+    #1 emitted out of the cloud
+    point = masktree.query(origin)
+    if point[0] < LIMIT:
+        emittedincloud = 1
+    else: emittedincloud = 0
+    
+
+    
     
     rng = np.random.default_rng(seed = seed6)
     ind_m = rng.uniform(0,1,m) 
@@ -241,34 +259,22 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
     # dist = x_scat_0
     # print(np.shape(dist))
     dist = np.zeros(m)
-    
+    absorb_flag = np.zeros(m)
         
     for j in np.arange(m): 
         if (j % 100) == 0:
             print(j)
+        # print(['photon = ' + str(j)])
+        incloud = 0
         counter = 0
         bound = 0
         k=0
         rng = np.random.default_rng(seed = (ab_arr_m[j]*100).astype(int))
         ab_arr = rng.uniform(0,1, 2000000)
-
-    # ;The position of the particle, after being emitted isotropically and scattered a distance x_scat_0 is given by:
-        # ;direction cosines
-        mu_x = np.sin(zenith_0[j])*np.cos(azimuth_0[j])
-        mu_y = np.sin(zenith_0[j])*np.sin(azimuth_0[j])
-        mu_z = np.cos(zenith_0[j])
-
-        # ;positions
-        x = origin[2] + x_scat_0[j]*mu_x
-        y = origin[1] + x_scat_0[j]*mu_y
-        z = origin[0] + x_scat_0[j]*mu_z
-        #;location = [[location],[x,y,z]]
-        # print([x,y,z])
+    
         if not np.logical_and(zenith_0[j], azimuth_0[j]):
             print('began')#  then begin
-        #; This is the 1st scatter calculations - for testing purposes
-        # ;The position of the particle, after being emitted isotropically and scattered a distance x_scat_0 is given by:
-            # ;direction cosines
+
             mu_x = np.sin(zenith_0[j])*np.cos(azimuth_0[j])
             mu_y = np.sin(zenith_0[j])*np.sin(azimuth_0[j])
             mu_z = np.cos(zenith_0[j])
@@ -279,21 +285,13 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
             z = z + x_scat_0[j]*mu_z
             endif 
 
-# ;Find angles of first scattering, these are relative to incoming angle from isotropic scatter.
-
-
         rng_ind = np.random.default_rng(seed = (ind_m[j]*100.).astype(int))
         ind = rng_ind.uniform(0,1,2000)*1999. + 1.
 
-        #this gives us most angles near 0
-
         zenith_arr = np.arccos((mu_arr[pp[1:]] + mu_arr[0:-1])/2.)
 
-        # # #;*****
         rng = np.random.default_rng(seed = (zenith_ind_m_seed[j]*100.).astype(int))
         zenith_ind = (rng.uniform(0,1,500000)*2000.).astype(int)
-        
-
 
         zenith_p = zenith_arr[zenith_ind]
         rng = np.random.default_rng(seed = (azimuth_r_m[j]*100.).astype(int))
@@ -301,14 +299,83 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
         rng = np.random.default_rng(seed = (r_m_1[j]*100.).astype(int))
         r = rng.uniform(0,1,500000)
         x_scat = -np.log(r)
+
+    
+    #First traveled distance  
+       
+    # ;The position of the particle, after being emitted isotropically and scattered a distance x_scat_0 is given by:
+        # ;direction cosines
+        mu_x = np.sin(zenith_0[j])*np.cos(azimuth_0[j])
+        mu_y = np.sin(zenith_0[j])*np.sin(azimuth_0[j])
+        mu_z = np.cos(zenith_0[j])
+    
+        # ;positions
+        xprev = origin[2]
+        yprev = origin[1]
+        zprev = origin[0]
         
-        
-        # #;******
-        while bound < 1:
+        x = origin[2] + x_scat_0[j]*mu_x
+        y = origin[1] + x_scat_0[j]*mu_y
+        z = origin[0] + x_scat_0[j]*mu_z
+
+        if emittedincloud == 0:
+            wasincloud = 0
+            point = masktree.query([z,y,x]) #check if second point is in cloud
+            if point[0] <LIMIT:
+            # print('emitted out of cloud, now in cloud')
             
+                incloud = 1
+                v = [(z - origin[0]),(y - origin[1]),(x - origin[2])]
+            # print([z1,y1,x1])
+                testlam = []
+                index = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6]
+                for t in index:
+                    x1 = origin[2] + t*v[2]
+                    y1 = origin[1] + t*v[1]
+                    z1 = origin[0] + t*v[0]
+                    testlam.append((LAM_arr[tree.query([z1,y1,x1])[1]]))
+        
+                min_t = index[np.nanargmin(testlam)]
+                       
+                if min_t < 1.0:
+  
+                    x = origin[2] + min_t*v[2]
+                    y = origin[1] + min_t*v[1]
+                    z = origin[0] + min_t*v[0]
+        
+            # print([z,y,x])
+            else:
+            # print('emitted out of cloud, still out of cloud')
+                incloud = 0
+            # continue
+        else:
+            wasincloud = 1
+            point = masktree.query([z,y,x]) #check if second point is in cloud
+            if point[0] <LIMIT:
+                incloud = 1
+            # print('emitted in cloud, still in cloud')
+            else: 
+                incloud = 0
+            # print('emitted in cloud, now out of cloud')
+                x_arr[j] = x
+                y_arr[j] = y
+                z_arr[j] = z
+                xprev_arr[j] = xprev
+                yprev_arr[j] = yprev
+                zprev_arr[j] = zprev
+                continue
+        # continue
+    
+    #Now move onto repeating it, we had to allow the photon to initially enter the cloud without
+    #worring about what the boundary condition is. 
+    
+    
+
+        while bound < 1: 
             counter +=1
+        # print(counter)
 # ;check to see if absorbed
-            if ab_arr[k] > w_0: absorb += 1
+            if ab_arr[k] > w_0: absorb_flag[j] = 1 # += 1
             if ab_arr[k] > w_0: break
 
 # ;Find the photon's second position
@@ -318,22 +385,22 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
             mu_y_new = ((np.sin(zenith_p[k])*(mu_y*mu_z*np.cos(azimuth_p[k]) + mu_x*np.sin(azimuth_p[k])))/denom) + mu_y*np.cos(zenith_p[k])
             mu_z_new = -(denom)*np.sin(zenith_p[k])*np.cos(azimuth_p[k]) + mu_z*np.cos(zenith_p[k])
 
-            #UNCOMMENT THIS FOR DISTRIBUTED LAMBDA
-            # print([z,y,x])
-            # print(LAM)
             if not math.isfinite(z):
                 print('broken')
                 break
-            if not math.isfinite(x):
+            if not math.isfinite(y):
                 print('broken')
                 break
             if not math.isfinite(x):
                 print('broken')
                 break
-            
+             
             LAM = LAM_arr[tree.query([z,y,x])[1]]
-            #print([z,y,x])
-            #print(LAM)
+            # LAM = 70.
+        # print(LAM)
+        # print(masktree.query([z,y,x])[0])
+
+    
             xprev = x
             yprev = y
             zprev = z
@@ -345,41 +412,65 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
             mu_y = mu_y_new
             mu_z = mu_z_new
             k += 1
-            #print(k)
-#             # ;check boundary conditions
-#             point = masktree.query([z,y,x])
-#             if point[0] >1100.:
-#                 bound = 1
-                
-            # ;check boundary conditions
+        
+
+        
+        #Check boundaries and if we need to scale back
             point = masktree.query([z,y,x])
-            if point[0] >1100.:
-                if outofCloud == 1:
-                    bound = 0
-                    outofCloud = 0
-                else: bound = 1
+            if (wasincloud == 0) and (point[0] <LIMIT):
+            # print('was out of cloud, now in cloud')
+            
+                incloud = 1
+                v = [(z - zprev),(y - yprev),(x - xprev)]
+                testlam = []
+                index = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6]
+                for t in index:
+                    x1 = xprev + t*v[2]
+                    y1 = yprev + t*v[1]
+                    z1 = zprev + t*v[0]
+                    testlam.append((LAM_arr[tree.query([z1,y1,x1])[1]]))
+        
+                min_t = index[np.nanargmin(testlam)]
+                       
+                if min_t < 1.0:
+                    x = xprev + min_t*v[2]
+                    y = yprev + min_t*v[1]
+                    z = zprev + min_t*v[0]
+                    newdist = sqrt( (x - xprev)**2 + (y - yprev)**2 + (z - zprev)**2)
+                    dist[j] -= LAM*x_scat[k]
+                    dist[j] += newdist
+                else: 
+                    print('was beyond end of the second point, so continuing scattering')
+            if point[0] > LIMIT:
+                incloud = 0
+        #The three scenarios are:
+            #1 was out of cloud and stayed out of cloud: (wasincloud ==0) and (point[0]>=500.)
+            #2 was in cloud and staayed in cloud: (wasincloud == 1) and (point[0]<500.)
+            #3 was inside cloud and now out of cloud (wasincloud == 1) and (incloud == 0)
+        
+            if (wasincloud == 1) and (incloud == 0): 
+            # print('was in cloud, but now out of cloud, ending sim')
+                bound = 1
+            
                 
-            #These are boundary checks when using a hard boundary. 
-            # if origin[2] >= coords[5]:# then begin #if the original point is 'inside the cloud'
-            #     if z > z_max: bound = 1
-            #     if z <= z_min: bound = 1
-            #     if y > y_max: bound = 1
-            #     if y <= y_min: bound = 1
-            #     if x > x_max: bound = 1
-            #     if x <= x_min: bound = 1
-            # else:  #if the original point is outside the cloud
-            #     if z > z_max: bound = 1
-            #     if z <= 0.: bound = 1 #it's below the ground
-            #     if y > y_max: bound = 1
-            #     if y <= y_min: bound = 1
-            #     if x > x_max: bound = 1
-            #     if x <= x_min: bound = 1
-            # endelse
-        #endrep until bound GT 0D 
-            #print(k)    
-            x_face = 0
-            y_face = 0
-            z_face = 0
+         #This check is for if any of the model boundaries are breached
+        
+                    # ;check boundary conditions
+        # if emittedincloud == 1:# then begin #if the original point is 'inside the cloud'
+            if z > z_max: bound = 1
+            if z <= z_min: bound = 1
+            if y > y_max: bound = 1
+            if y <= y_min: bound = 1
+            if x > x_max: bound = 1
+            if x <= x_min: bound = 1             
+                
+                
+                
+            if incloud == 1:
+                wasincloud = 1
+            
+        # print(bound)    
+        # print([z,y,x])        
 
 
         x_arr[j] = x
@@ -391,13 +482,11 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,zz,yy,xx,tree,masktree, LAM_arr,S
         zenith_arrout[j] = zenith_p[k]
         azimuth_arrout[j] = azimuth_p[k]
 
-    x_face = 0
-    y_face = 0
-    z_face = 0
     
-    print(absorb)
-    array_out =np.column_stack((x_arr,y_arr,z_arr,xprev_arr, yprev_arr, zprev_arr,dist))#,zenith_arrout,azimuth_arrout))
+    # print(absorb)
+    array_out =np.column_stack((x_arr,y_arr,z_arr,xprev_arr, yprev_arr, zprev_arr,absorb_flag,dist)) #,zenith_arrout,azimuth_arrout))
     return(array_out)  
+       
        
   
 
