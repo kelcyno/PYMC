@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 #Note this is edited outside of the github version on 11/13/2024 to handle entire dataset point simulations
-#Rewritten for Python 3.8
+#Rewritten for Python 3.10
 
 #Modified theta and phi for zenith and azimuthal angle (respectively) 11/13/2024
 #Zenith is angle from +z axis, azimuthal is angle form +x axis. 
@@ -13,102 +13,99 @@
 #Modified for a 3d scattering profile 3/28/2024
 
 #Modified for cloud boundary logic 12/15/2025
-# 
+
+#Modified for simulations ending at edge of simulation, no cloud is considered. 
+#This changes the input as the cloud mask is no longer needed. Further, all scatterings are evaluated for distinct changes in the MFP. 
+#The tolerance (TOL) and percentage of MFP allowed to change before it is considered a change necessary to reset 
+#the simulation is determined by the user in the input. 
+#Note, the function outside_of_coords now output which boundary (in coords list) that is exceeded. 6/28/2025
 
 # ;@knb_mc_sim
-# ;WRF Core profile: 8-23-2019, using mean level radii from DSD and conc from dry_air_density*qndrop/ice/etc
-# ;Uses 1km average profile. Uncomment the levels in lambda if/then statements to use other averaging values.
-# ;+
-# ; Author: Kelcy Brunner, kelcy.brunner@ttu.edu
-# ;The purpose of this program is to simulate the randomized optical scattering occuring in the 777.4nm wavelength.
-# ;-
+# #WRF Core profile: 8-23-2019, using mean level radii from DSD and conc from dry_air_density*qndrop/ice/etc
+# #Uses 1km average profile. Uncomment the levels in lambda if/then statements to use other averaging values.
 # 
-# ;+
-# ; Description:
-# ;   This model ingests a number of photons (m), a source position, the shape of the cloud, the output array, and a microphysical profile.
-# ;   All of which may be specified in the call line, or in a companion wrapper program title knb_mc_wrapper.pro
-# ;
-# ; Parameters:
-# ;   m: value of the number of photons to be simulated
-# ;        Type: int, or long int.
-# ;   concentration: number concentration (in count per m^3), same dimensions as model coordinates, in the format [t,z,y,x]
-# ;        Typically this is produced in the file knb_calc_distro_MODELTYPE.ipynb
-# ;   size: concentration weighted mean particle size (in count per m), same dimensions as model coordinates, in the format [t,z,y,x]
-# ;        Typically this is produced in the file knb_calc_distro_MODELTYPE.ipynb
-# ;        Type: float 32/64
-# ;   profile_in: xarray dataset of the constituents and coordinates of the concentration and size parameters. 
-# ;        Typically this is produced in the file knb_calc_distro_MODELTYPE.ipynb
-# ;        Type: xarray.core.dataset.Dataset
-# ;   tree: KD tree of the xyz locations for each grid space with a mean free path. This is often included in the sim, but
-# ;        is kept offline here to avoid repeating the calculation.
-# ;        Type: scipy.spatial._kdtree.KDTree
-# ;   masktree: KD tree of the xyz locations for each grid space with a mean free path less than the cloud MFP (200m).
-# ;        This is often included in the sim, but is kept offline here to avoid repeating the calculation.
-# ;        Type: scipy.spatial._kdtree.KDTree
-# ;   LAM_arr: 1d array of MFP corresponding to the above concentration and size parameters calculated MFP, same length.
-# ;        This is often included in the sim, but is kept offline here to avoid repeating the calculation.
-# ;        Type: numpy.ndarray
-# ;
-# ;
-# ; Keywords
-# ;   SEEDER: a seed for randomization. The default is systime(/sec).
-# ;       Type: a single or double precision value, but a whole number is required by randomu.
-# ;
-# ;   COORDS: A 6 element array of the cloud coordinates of the faces in the following order: [x+, x-, y+, y-, z+, z-].
-# ;   The units must be in the same units as the origin location, and if not specified is chosen as meters (m).
-# ;       Type: Single or double precision is sufficient.
-# ;
-# ;   ORIGIN: A 3 element array [z, y, x] specifying the position of the photons to be simulated. The units must be the same as the COORDS keyword, the default is meters (m).
-# ;       Type: Single or double precision is sufficient.
-# ;
-# ;   TOL: this is a percentage of the MFP that is an allowable range within to consider a 'boundary' - e.g., 25% 
-# ;       Type: float, Default: 0.1
-# ;   LIMIT: this is the distance (m) from the cloud you may be to still be included in the cloud. In general it is best to be no greater than 1 dx/dy/dz length. 
-# ;       Type: float, Default: 100m
-# ;
-# ; Output/Returns
-# ;      [m,9] numpy.ndarray
-# ;		 [m,0]: numpy array of final x positions for all photons	 array_out =np.column_stack((x_arr,y_arr,z_arr,xprev_arr, yprev_arr, zprev_arr,k_arr,absorb_flag,dist)) #,zenith_arrout,azimuth_arrout))
-# ;		 [m,1]: numpy array of final y positions for all photons
-# ;		 [m,2]: numpy array of final z positions for all photons
-# ;		 [m,3]: numpy array of second to final x positions for all photons
-# ;		 [m,4]: numpy array of second to final y positions for all photons
-# ;		 [m,5]: numpy array of second to final z positions for all photons
-# ;		 [m,6]: numpy array of the number of times the photon scattered 
-# ;		 [m,7]: numpy array of the absorption flag: 0 = not absorbed, 1 = absorbed
-# ;		 [m,8]: numpy array of the distance each photon traveled through its path. 
-# ;
-# ;
-# ;
-# ; Call example:
-# ;   out = knb_mc_sim(m,profile_in['particle_concentration'].values,profile_in['particle_size'].values,profile_in,tree,masktree,LAM_arr,SEEDER  = 10,origin = origin, LIMIT = 500.)
-# ;
-# ;
-# ;-Kelcy
-# ;step 1: Photon is emitted in a random direction from the source location.
-#   
-# ;step 2: Photon travels with an assumed probability that it travels a distance x without an interaction given by P(x) = exp(-x/LAM) where LAM is the mean free path.
+# Author: Kelcy Brunner, kelcy.brunner@ttu.edu
+# The purpose of this program is to simulate the randomized optical scattering occuring in the 777.4nm wavelength.
 # 
-# ;step 3: The photon 'encounters' a scatterer, it is either absorbed or scattered
-#   
-# ;step 4: Check if photon is still within the cloud, if yes then it travels another distance x and step 3 is repeated or it exits the cloud.
-#   
-# ;step 5: Check if photon is outside the cloud or absorbed, if it is, note the final photon position.
-#   
-# ;step 6: repeat for another photon.
+# Description:
+#    This model ingests a number of photons (m), a source position, the shape of the cloud, the output array, and a microphysical profile.
+#    All of which may be specified in the call line, or in a companion wrapper program title knb_mc_wrapper.pro
 # 
+#  Parameters:
+#    m: value of the number of photons to be simulated
+#         Type: int, or long int.
+#    concentration: number concentration (in count per m^3), same dimensions as model coordinates, in the format [t,z,y,x]
+#         Typically this is produced in the file knb_calc_distro_MODELTYPE.ipynb
+#    size: concentration weighted mean particle size (in count per m), same dimensions as model coordinates, in the format [t,z,y,x]
+#         Typically this is produced in the file knb_calc_distro_MODELTYPE.ipynb
+#         Type: float 32/64
+#    profile_in: xarray dataset of the constituents and coordinates of the concentration and size parameters. 
+#         Typically this is produced in the file knb_calc_distro_MODELTYPE.ipynb
+#         Type: xarray.core.dataset.Dataset
+#    tree: KD tree of the xyz locations for each grid space with a mean free path. This is often included in the sim, but
+#         is kept offline here to avoid repeating the calculation.
+#         Type: scipy.spatial._kdtree.KDTree
+#    LAM_arr: 1d array of MFP corresponding to the above concentration and size parameters calculated MFP, same length.
+#         This is often included in the sim, but is kept offline here to avoid repeating the calculation.
+#         Type: numpy.ndarray
+# 
+# 
+#  Keywords
+#    SEEDER: a seed for randomization. The default is systime(/sec).
+#        Type: a single or double precision value, but a whole number is required by randomu.
+# 
+#    COORDS: A 6 element array of the cloud coordinates of the faces in the following order: [x+, x-, y+, y-, z+, z-].
+#    The units must be in the same units as the origin location, and if not specified is chosen as meters (m).
+#        Type: Single or double precision is sufficient.
+# 
+#    ORIGIN: A 3 element array [z, y, x] specifying the position of the photons to be simulated. The units must be the same as the COORDS keyword, the default is meters (m).
+#        Type: Single or double precision is sufficient.
+# 
+#    TOL: this is a percentage of the MFP that is an allowable range within to consider a 'boundary' - e.g., 25% 
+#        Type: float, Default: 0.1
+#    DISTLIMIT: this is the distance (m) from the cloud you may be to still be included in the cloud. In general it is best to be no greater than 1 dx/dy/dz length. 
+#        Type: float, Default: 200m
+#    LAMLIMIT: this is MFP limit to be considered a sufficiently different environment to reevaluate the photon position.  
+#        Type: float, Default: 200m
+# 
+#  Output/Returns
+# 	     [m,0]: numpy array of final x positions for all photons	 
+#        [m,1]: numpy array of final y positions for all photons
+# 		 [m,2]: numpy array of final z positions for all photons
+# 		 [m,3]: numpy array of second to final x positions for all photons
+# 		 [m,4]: numpy array of second to final y positions for all photons
+# 		 [m,5]: numpy array of second to final z positions for all photons
+# 		 [m,6]: numpy array of the number of times the photon scattered 
+# 		 [m,7]: numpy array of the absorption flag: 0 = not absorbed, 1 = absorbed
+# 		 [m,8]: numpy array of the distance each photon traveled through its path. 
+# 
+# 
+# 
+#  Call example:
+#  out = knb_mc_sim(m,profile_in,tree,LAM_arr,SEEDER  = 15,origin = origin, DISTLIMIT = 125.,LAMLIMIT=200.,coords = coords)
+# 
+# 
+# -Kelcy
+# step 1: Photon is emitted in a random direction from the source location.
+#    
+# step 2: Photon travels with an assumed probability that it travels a distance x without an interaction given by P(x) = exp(-x/LAM) where LAM is the mean free path.
+#  
+# step 3: The photon 'encounters' a scatterer, it is either absorbed or scattered
+#    
+# step 4: Check if photon is still within the cloud, if yes then it travels another distance x and step 3 is repeated or it exits the cloud.
+#    
+# step 5: Check if photon is outside the cloud or absorbed, if it is, note the final photon position.
+#   
+# step 6: repeat for another photon.
 
 import numpy as np
-from glob import glob
 import matplotlib
 import xarray as xr
 import math
-from scipy.io import readsav
 from pandas.core.common import flatten
 from scipy import spatial, constants
 import pandas
 from datetime import datetime, timedelta
-import numpy as np
 import pandas as pd
 
 def outside_of_coords(point, coordinates):
@@ -118,28 +115,42 @@ def outside_of_coords(point, coordinates):
     if point[0] > coordinates[0]:
         bound = 1
     if point[0] < coordinates[1]:
-        bound = 1        
+        bound = 2        
     if point[1] > coordinates[2]:
-        bound = 1
+        bound = 3
     if point[1] < coordinates[3]:
-        bound = 1
+        bound = 4
     if point[2] > coordinates[4]:
-        bound = 1
+        bound = 5
     if point[2] < coordinates[5]:
-        bound = 1
+        bound = 6
     return bound
-def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 10,
-               LIMIT = 100.,
+
+def find_crossing(prevpoint, point,coords):
+    v = [(point[0] - prevpoint[0]),(point[1] - prevpoint[1]),(point[2] - prevpoint[2])]
+    test = outside_of_coords(point, coords) - 1
+    vi = math.floor(test/2)
+    if vi == 2:
+        t = (coords[test] - prevpoint[2])/v[vi]
+    if vi ==1:
+        t = (coords[test] - prevpoint[1])/v[vi]
+    if vi == 0:
+        t = (coords[test] - prevpoint[0])/v[vi]
+    x = prevpoint[0] + t*v[0]
+    y = prevpoint[1] + t*v[1]
+    z = prevpoint[2] + t*v[2]
+    return [x,y,z]
+def knb_mc_sim(m,PROFILE_IN,tree,LAM_arr,SEEDER = 10.,
+               DISTLIMIT = 200.,LAMLIMIT = 200.,
                HOMOGENEOUS = False,TOL = 0.1,
                coords = [40e3,0.,40e3,0.,20e3,0.], 
                origin = [5e3,5e3,5e3]):
 
-    
+    concentration = PROFILE_IN['particle_concentration']
+    size = PROFILE_IN['particle_size']
     #origin order is [z,y,x] because gridcoords is z,y,x
-    print(origin)
-    previousloc = 0 #0 for out of cloud, 1 for in cloud
-    currentloc = 0 #0 for out of cloud, 1 for in cloud
-    # print(coords)
+    # print(origin)
+
     #coords is xmax,xmin, ymax,ymin, zmax,zmin
     #Find the dx, dy, dz
     dx = PROFILE_IN['x'][1].values - PROFILE_IN['x'][0].values
@@ -218,18 +229,8 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 1
     #UNCOMMENT THIS FOR DISTRIBUTED LAMBDA
     LAM = LAM_arr[tree.query(origin)[1]]
     # LAM = 70. #uncomment for homogeneous atmosphere for funsies
-    print(LAM)
+    # print(LAM)
     x_scat_0 = -LAM*np.log(r_m)
-    
-    #two cases:
-    #1 Emitted in the cloud: 
-    #1 emitted out of the cloud
-    point = masktree.query(origin)
-    if point[0] < LIMIT:
-        currentloc = 1
-    else: currentloc = 0
-
-    
     
     rng = np.random.default_rng(seed = seed6)
     ind_m = rng.uniform(0,1,m) 
@@ -243,13 +244,14 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 1
     r_m_1 = rng.uniform(0,1,m)
         
     for j in np.arange(m): 
-        if (j % 10) == 0:
+        if (j % 100) == 0:
             print(j)
+
         counter = 0
         bound = 0
         k=0
         rng = np.random.default_rng(seed = (ab_arr_m[j]*100).astype(int))
-        ab_arr = rng.uniform(0,1, 2000000)
+        ab_arr = rng.uniform(0,1, 200000)
     
         if not np.logical_and(zenith_0[j], azimuth_0[j]):
             print('began')#  then begin
@@ -263,19 +265,17 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 1
             y = y + x_scat_0[j]*mu_y
             z = z + x_scat_0[j]*mu_z
             endif 
-
         rng_ind = np.random.default_rng(seed = (ind_m[j]*100.).astype(int))
         ind = rng_ind.uniform(0,1,2000)*1999. + 1.
         zenith_arr = np.arccos((mu_arr[pp[1:]] + mu_arr[0:-1])/2.)
         rng = np.random.default_rng(seed = (zenith_ind_m_seed[j]*100.).astype(int))
-        zenith_ind = (rng.uniform(0,1,500000)*2000.).astype(int)
+        zenith_ind = (rng.uniform(0,1,20000)*2000.).astype(int)
         zenith_p = zenith_arr[zenith_ind]
         rng = np.random.default_rng(seed = (azimuth_r_m[j]*100.).astype(int))
-        azimuth_p = rng.uniform(0,2*math.pi,500000)
+        azimuth_p = rng.uniform(0,2*math.pi,20000)
         rng = np.random.default_rng(seed = (r_m_1[j]*100.).astype(int))
-        r = rng.uniform(0,1,500000)
+        r = rng.uniform(0,1,20000)
         x_scat = -np.log(r)
-
     
     #First traveled distance  
        
@@ -291,42 +291,47 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 1
         x = origin[2] + x_scat_0[j]*mu_x
         y = origin[1] + x_scat_0[j]*mu_y
         z = origin[0] + x_scat_0[j]*mu_z
-        previousloc = currentloc
-        point = masktree.query([z,y,x])
-        if point[0]<LIMIT:
-            currentloc = 1
-        else:
-            currentloc = 0
-       
- #LOGIC FOR In/Out of cloud options                
-        if (previousloc == 0) or (previousloc != currentloc):
 
-            v = [(z - zprev),(y - yprev),(x - xprev)]
+        ptdist = np.sqrt((z-zprev)**2 + (y-yprev)**2 + (x-xprev)**2)
+        if LAM_arr[tree.query([z,y,x])[1]] != LAM: 
+            #this is only considered if the LAM is not the same as the previous location. 
+            #Otherwise it is still travling in the same voxel.
+            v = [(x - xprev),(y - yprev),(z - zprev)]
             testlam = []
-            ptdist = np.sqrt((z-zprev)**2 + (y-yprev)**2 + (x-xprev)**2)
+            index = np.arange(int(math.ceil((ptdist/dx)/10.))*10)*(dx/ptdist)
+            index=index[1:]
 
-            index = np.arange(500)*(dx/ptdist)
-            x1 = xprev + index*v[2]
+            x1 = xprev + index*v[0]
             y1 = yprev + index*v[1]
-            z1 = zprev + index*v[0]
+            z1 = zprev + index*v[2]
             
-            for t in np.arange(500):
+            for t in np.arange(len(index)):
                 testlam.append((LAM_arr[tree.query([z1[t],y1[t],x1[t]])[1]]))
-            newind = np.argmin(np.abs((1+TOL)*LIMIT- np.array(testlam)))   
-            if (previousloc == 0) and (currentloc == 0):
-                if ~np.any(np.array(testlam) <= (1+TOL)*LIMIT):
-                    newind = -1
-            min_t = index[newind]
-            x = xprev + min_t*v[2]
-            y = yprev + min_t*v[1]
-            z = zprev + min_t*v[0]
-#     #The position has now been updated to the cloud boundary, we can reset and scatter again.
-            LAM = testlam[newind]
-             
+            newind = (np.where(np.array(testlam) <= (1+TOL)*LAMLIMIT))
 
-        dist[j] += np.sqrt( (x - xprev)**2 + (y - yprev)**2 + (z - zprev)**2)
-        if outside_of_coords([z,y,x], coords):
-            # print('ending because bounds')
+            # if (newind[0].size == 0): #meaning there is nothing in the path below the limit
+                    # we assume that if there is nothing in the path, there is also a good chance
+                    # This photon has scattered outside of the simulation boundary.
+                    # However, if we adjust the location before testing the boundary, then it will never exceed the boundary
+            if (len(testlam) > newind[0].size > 0):
+                #We assume something in the path, and update the path to the start of that 'something'
+                # print('layer or change')
+                newind = np.nanmin(newind[0])
+                x = x1[newind]
+                y = y1[newind]
+                z = z1[newind]
+                LAM = testlam[newind]
+                    
+            #note the 3rd instance, where all points along a path between the previous xyx and new xyz are below the 
+            #LAM limit, we let the xyz stand. It does not need to be updated for a new environment or boundary. 
+
+        if outside_of_coords([x,y,z], coords):
+            #If the photon exits the boundary of the simulation the end point is drawn
+            #by finding the boundary crossed, and what the photon x/y/z position is at the boundary. 
+            #The end positions (x,y,z) are updated to that position. 
+            x,y,z = find_crossing([xprev,yprev,zprev],[x,y,z],coords)
+
+            dist[j] += np.sqrt( (x - xprev)**2 + (y - yprev)**2 + (z - zprev)**2)
             x_arr[j] = x
             y_arr[j] = y
             z_arr[j] = z
@@ -336,11 +341,23 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 1
             k_arr[j]=k
             continue
 
+        dist[j] += np.sqrt( (x - xprev)**2 + (y - yprev)**2 + (z - zprev)**2)
+
         while bound < 1: 
+            exceeded_bounds = 0
             counter +=1
             # ;check to see if absorbed
-            if ab_arr[k] > w_0: absorb_flag[j] = 1 # += 1
-            if ab_arr[k] > w_0: break
+            if ab_arr[k] > w_0: 
+                absorb_flag[j] = 1 
+                print('absorbed')
+                dist[j] += np.sqrt( (x - xprev)**2 + (y - yprev)**2 + (z - zprev)**2)
+                x_arr[j] = x
+                y_arr[j] = y
+                z_arr[j] = z
+                xprev_arr[j] = xprev
+                yprev_arr[j] = yprev
+                zprev_arr[j] = zprev
+                break
 
 
 # ;Find the photon's second position
@@ -372,46 +389,56 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 1
             mu_y = mu_y_new
             mu_z = mu_z_new
             k += 1
-        
 
-            previousloc = currentloc
-            point = masktree.query([z,y,x])
-            if point[0]<LIMIT:
-                currentloc = 1
-            else:
-                currentloc = 0
-       
- #LOGIC FOR In/Out of cloud options                
-            if (previousloc == 0) or (previousloc != currentloc):
 
-                v = [(z - zprev),(y - yprev),(x - xprev)]
+            ptdist = np.sqrt((z-zprev)**2 + (y-yprev)**2 + (x-xprev)**2)
+            if LAM_arr[tree.query([z,y,x])[1]] != LAM: 
+            #this is only considered if the LAM is not the same as the previous location. 
+            #Otherwise it is still travling in the same voxel.
+    
+                v = [(x - xprev),(y - yprev),(z - zprev)]
                 testlam = []
-                ptdist = np.sqrt((z-zprev)**2 + (y-yprev)**2 + (x-xprev)**2)
+                ind = int(math.ceil((ptdist/dx)/10.))*10
+                if ind > 50000:
+                    ind = 50000
+                index = np.arange(ind)*(dx/ptdist)
+                index=index[1:]
 
-                index = np.arange(500)*(dx/ptdist)
-                x1 = xprev + index*v[2]
+                x1 = xprev + index*v[0]
                 y1 = yprev + index*v[1]
-                z1 = zprev + index*v[0]
+                z1 = zprev + index*v[2]
             
-                for t in np.arange(500):
+                for t in np.arange(len(index)):
                     testlam.append((LAM_arr[tree.query([z1[t],y1[t],x1[t]])[1]]))
-                newind = np.argmin(np.abs((1+TOL)*LIMIT- np.array(testlam)))   
-                if (previousloc == 0) and (currentloc == 0):
-                    if ~np.any(np.array(testlam) <= (1+TOL)*LIMIT):
-                        newind = -1
-                min_t = index[newind]
-                x = xprev + min_t*v[2]
-                y = yprev + min_t*v[1]
-                z = zprev + min_t*v[0]
-#     #The position has now been updated to the cloud boundary, we can reset and scatter again.
-                LAM = testlam[newind]
-             
+                newind = (np.where(np.array(testlam) <= (1+TOL)*LAMLIMIT))
+                # if (newind[0].size == 0): #meaning there is nothing in the path below the limit
+                    # we assume that if there is nothing in the path, there is also a good chance
+                    # This photon has scattered outside of the simulation boundary.
+                    # However, if we adjust the location before testing the boundary, then it will never exceed the boundary
 
-            dist[j] += np.sqrt( (x - xprev)**2 + (y - yprev)**2 + (z - zprev)**2)
+                if (len(testlam) > newind[0].size > 0):
+                    #We assume something in the path, and update the path to the start of that 'something'
+                    newind = np.nanmin(newind[0])
+                    x = x1[newind]
+                    y = y1[newind]
+                    z = z1[newind]
+                    LAM = testlam[newind]
 
-            if outside_of_coords([z,y,x], coords):
+                    
+    #note the 3rd instance, where all points along a path between the previous xyx and new xyz are below the 
+    #LAM limit, we let the xyz stand. It does not need to be updated for a new environment or boundary. 
+
+            if outside_of_coords([x,y,z], coords):
+                #If the photon exits the boundary of the simulation the end point is drawn
+                #by finding the boundary crossed, and what the photon x/y/z position is at the boundary. 
+                #The end positions (x,y,z) are updated to that position. 
+                x,y,z = find_crossing([xprev,yprev,zprev],[x,y,z],coords)
+                #else, just use the originally determined xyz 
                 bound = 1
-                
+
+            dist[j] += np.sqrt( (x - xprev)**2 + (y - yprev)**2 + (z - zprev)**2) 
+        
+        # print(k)    
         x_arr[j] = x
         y_arr[j] = y
         z_arr[j] = z
@@ -419,22 +446,17 @@ def knb_mc_sim(m,concentration,size,PROFILE_IN,tree,masktree, LAM_arr,SEEDER = 1
         yprev_arr[j] = yprev
         zprev_arr[j] = zprev
         k_arr[j]=k
-        # print([z,y,x])
-    
-    # print(absorb)
+
+        del k,xprev,yprev,zprev,x,y,z,rng,ab_arr, rng_ind, ind, zenith_arr,r,x_scat,azimuth_p,zenith_ind,zenith_p
+
     array_out =np.column_stack((x_arr,y_arr,z_arr,xprev_arr, yprev_arr, zprev_arr,k_arr,absorb_flag,dist)) #,zenith_arrout,azimuth_arrout))
-    return(array_out)#, pathx,pathy,pathz)        
-  
+    return(array_out)  
 
 #This is a simple single simulation with a single origin. M is the number of 'photons'. Keep track of seeds for your own use and do not replicate
-#seeds in the same simulation. For extended sources repeat this simulation with the updated origin. Origin points are given in meters., Similarly with Coords
-#Coords is as legacy input as the cloud is determined by the mean free path. Should you prefer the cloud boundary be a hard boundary set accordingly. 
+#seeds in the same simulation. For extended sources repeat this simulation with the updated origin. Origin points are given in meters., Similarly with Coords.
 
-
-m = 2500
-
+m = 5000
 profile_in = xr.open_dataset('3D_COMMAS_KTAL071015B_30s.002430.nc')
-
         #make points and kdtree for cloud coordinates
 zz,yy,xx = np.meshgrid(profile_in['z'].values, profile_in['y'].values,profile_in['x'].values,indexing='ij')
 length = len(profile_in['x'])*len(profile_in['y'])*len(profile_in['z'])
@@ -443,28 +465,20 @@ yy = np.reshape(yy,length)
 zz = np.reshape(zz,length)
 gridcoords = np.stack((zz,yy,xx),axis = 1) 
 tree = spatial.KDTree(gridcoords)
-    
 N_dense = np.reshape(profile_in['particle_concentration'].values,length)
 a_arr = np.reshape(profile_in['particle_size'].values,length)
 a_arr = np.array([0 if math.isnan(i) else i for i in a_arr])
 N_dense = np.array([0 if math.isnan(i) else i for i in N_dense])
     
     # ######Check microphysical profile
-
 LAM_arr = (1./(2.*math.pi*(a_arr**2.)*N_dense)) #make sure a_arr isn't creating a matrix
 LAM_arr = np.nan_to_num(LAM_arr,posinf = 999999,neginf = 999999)
 
-    #NOTE, WE USE A MEAN FREE PATH OF 200m here as the cloud boundary. It is on the user to determine if this is appropriate for THEIR CLOUD.
-mask = np.where(LAM_arr <= 200)
-mask = np.array(list(flatten(mask)))
-maskstack = np.stack((zz[mask],yy[mask],xx[mask]),axis=1)
-masktree = spatial.KDTree(maskstack)
+coords = [40e3,0.,40e3,0.,20e3,0.]
 origin = [4062.5,21e3,15e3]
-out = knb_mc_sim(m,profile_in['particle_concentration'].values,profile_in['particle_size'].values,profile_in,
-                           tree,masktree,LAM_arr,SEEDER  = 10,origin = origin, LIMIT = 500.)
+out = knb_mc_sim(m,profile_in,tree,LAM_arr,SEEDER  = 15,origin = origin, DISTLIMIT = 125.,LAMLIMIT=200.,coords = coords)
+
 df = pd.DataFrame(out)
-file_name = 'COMMAS30s_'+str(origin[0])+'_'+str(origin[1])+'_'+str(origin[2])+'.csv'
-
-
+file_name = 'COMMAS30s_'+str(origin[0])[:-2]+'_'+str(origin[1])[:-2]+'_'+str(origin[2])[:-2]+'.csv'
 print(file_name)
 df.to_csv(file_name, index=False)
